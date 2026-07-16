@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "InkFlow AI",
-  description: "Turn Your Smartphone into an AI-Powered Digital Notebook",
+  description: "Turn Your Smartphone into an AI-Powered Digital Stylus",
 };
 
 export default function RootLayout({

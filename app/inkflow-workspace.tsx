@@ -1,11 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppHeader } from "./_components/app-header";
+import { BlankNoteSheet } from "./_components/blank-note-sheet";
+import { WorkspaceSidebar } from "./_components/workspace-sidebar";
+import { prepareInkImage } from "./_lib/prepare-ink-image";
+import { socket } from "./_lib/socket-client";
+import QRCodeGenerator from "qrcode";
+import Image from "next/image";
 
 type IconName =
   | "arrow" | "back" | "check" | "chevron" | "cloud" | "download"
   | "edit" | "eraser" | "image" | "math" | "menu" | "mic" | "more"
-  | "pen" | "plus" | "redo" | "scan" | "search" | "settings" | "shapes"
+  | "pen" | "plus" | "redo" | "scan" | "shapes"
   | "sparkle" | "text" | "undo" | "upload" | "wifi" | "x";
 
 const paths: Record<IconName, React.ReactNode> = {
@@ -26,8 +33,6 @@ const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
   redo: <><path d="m15 7 4 4-4 4" /><path d="M19 11H9a5 5 0 0 0-5 5" /></>,
   scan: <><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 12h8" /></>,
-  search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
-  settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.2.36.5.7.9.88.34.16.7.24 1.08.22H21v4h-.1A1.7 1.7 0 0 0 19.4 15Z" /></>,
   shapes: <><circle cx="7" cy="7" r="4" /><rect x="12" y="12" width="8" height="8" rx="1" /></>,
   sparkle: <><path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8ZM19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7Z" /></>,
   text: <><path d="M5 5h14M12 5v14M8 19h8" /></>,
@@ -37,7 +42,7 @@ const paths: Record<IconName, React.ReactNode> = {
   x: <><path d="m6 6 12 12M18 6 6 18" /></>,
 };
 
-function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
+export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
@@ -57,8 +62,14 @@ function QRCode() {
 
 export default function InkflowWorkspace() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const laptopCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const lastPoint = useRef({ x: 0, y: 0 });
+  const pauseTimer = useRef<number | null>(null);
+  const strokes = useRef<Array<{ tool: "pen" | "eraser"; points: Array<{ x: number; y: number }> }>>([]);
+  const activeStroke = useRef<{ tool: "pen" | "eraser"; points: Array<{ x: number; y: number }> } | null>(null);
+  const recognitionInFlight = useRef(false);
+  const undoStack = useRef<Array<{ phone: ImageData; laptop: ImageData | null }>>([]);
   const [sidebar, setSidebar] = useState(true);
   const [pairing, setPairing] = useState(false);
   const [phone, setPhone] = useState(false);
@@ -69,6 +80,28 @@ export default function InkflowWorkspace() {
   const [refining, setRefining] = useState(false);
   const [refined, setRefined] = useState(false);
   const [toast, setToast] = useState("");
+  const [isNewNote, setIsNewNote] = useState(false);
+  const [recognizedText, setRecognizedText] = useState("");
+  const [recognitionError, setRecognitionError] = useState("");
+  const [darkMode, setDarkMode] = useState(false);
+  const [remotePhone, setRemotePhone] = useState(false);
+  const [qrImage, setQrImage] = useState("");
+  const [pairingUrl, setPairingUrl] = useState("");
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setDarkMode(window.localStorage.getItem("inkflow-theme") === "dark");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  const toggleTheme = () => {
+    setDarkMode((current) => {
+      const next = !current;
+      window.localStorage.setItem("inkflow-theme", next ? "dark" : "light");
+      return next;
+    });
+  };
 
   const notify = (message: string) => {
     setToast(message);
@@ -86,6 +119,29 @@ export default function InkflowWorkspace() {
     ctx?.scale(ratio, ratio);
   }, []);
 
+  const resizeLaptopCanvas = useCallback(() => {
+    const canvas = laptopCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    if (canvas.width === rect.width * ratio && canvas.height === rect.height * ratio) return;
+    const snapshot = document.createElement("canvas");
+    snapshot.width = canvas.width;
+    snapshot.height = canvas.height;
+    snapshot.getContext("2d")?.drawImage(canvas, 0, 0);
+    canvas.width = rect.width * ratio;
+    canvas.height = rect.height * ratio;
+    const context = canvas.getContext("2d");
+    context?.scale(ratio, ratio);
+    if (snapshot.width && snapshot.height) context?.drawImage(snapshot, 0, 0, rect.width, rect.height);
+  }, []);
+
+  useEffect(() => {
+    resizeLaptopCanvas();
+    window.addEventListener("resize", resizeLaptopCanvas);
+    return () => window.removeEventListener("resize", resizeLaptopCanvas);
+  }, [isNewNote, resizeLaptopCanvas]);
+
   useEffect(() => {
     if (!phone) return;
     resizeCanvas();
@@ -101,7 +157,29 @@ export default function InkflowWorkspace() {
   const startInk = (event: React.PointerEvent<HTMLCanvasElement>) => {
     drawing.current = true;
     lastPoint.current = point(event);
+    activeStroke.current = { tool, points: [lastPoint.current] };
+    strokes.current.push(activeStroke.current);
+    const phoneContext = event.currentTarget.getContext("2d");
+    const laptopCanvas = laptopCanvasRef.current;
+    const laptopContext = laptopCanvas?.getContext("2d");
+    if (phoneContext) {
+      undoStack.current.push({
+        phone: phoneContext.getImageData(0, 0, event.currentTarget.width, event.currentTarget.height),
+        laptop: laptopCanvas && laptopContext ? laptopContext.getImageData(0, 0, laptopCanvas.width, laptopCanvas.height) : null,
+      });
+      if (undoStack.current.length > 20) undoStack.current.shift();
+    }
+    if (pauseTimer.current) window.clearTimeout(pauseTimer.current);
     event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const mapToLaptop = (sourceCanvas: HTMLCanvasElement, targetCanvas: HTMLCanvasElement, sourcePoint: { x: number; y: number }) => {
+    const sourceRect = sourceCanvas.getBoundingClientRect();
+    const targetRect = targetCanvas.getBoundingClientRect();
+    const scale = Math.min(targetRect.width / sourceRect.width, targetRect.height / sourceRect.height);
+    const offsetX = (targetRect.width - sourceRect.width * scale) / 2;
+    const offsetY = (targetRect.height - sourceRect.height * scale) / 2;
+    return { x: offsetX + sourcePoint.x * scale, y: offsetY + sourcePoint.y * scale, scale };
   };
 
   const moveInk = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -117,74 +195,170 @@ export default function InkflowWorkspace() {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.stroke();
+
+    const laptopCanvas = laptopCanvasRef.current;
+    const laptopContext = laptopCanvas?.getContext("2d");
+    if (laptopCanvas && laptopContext) {
+      const from = mapToLaptop(event.currentTarget, laptopCanvas, lastPoint.current);
+      const to = mapToLaptop(event.currentTarget, laptopCanvas, next);
+      laptopContext.beginPath();
+      laptopContext.moveTo(from.x, from.y);
+      laptopContext.lineTo(to.x, to.y);
+      laptopContext.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+      laptopContext.strokeStyle = darkMode ? "#f1edf7" : "#29243b";
+      laptopContext.lineWidth = (tool === "eraser" ? 18 : 3) * from.scale;
+      laptopContext.lineCap = "round";
+      laptopContext.lineJoin = "round";
+      laptopContext.stroke();
+    }
+    activeStroke.current?.points.push(next);
     lastPoint.current = next;
     setInked(true);
     setRefined(false);
+    if (pauseTimer.current) window.clearTimeout(pauseTimer.current);
+    pauseTimer.current = window.setTimeout(() => refine(), 4000);
   };
 
   const clearInk = () => {
     const canvas = canvasRef.current;
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    const laptopCanvas = laptopCanvasRef.current;
+    laptopCanvas?.getContext("2d")?.clearRect(0, 0, laptopCanvas.width, laptopCanvas.height);
+    strokes.current = [];
+    undoStack.current = [];
     setInked(false);
     setRefined(false);
   };
 
-  const refine = () => {
+  const undoInk = () => {
+    const previous = undoStack.current.pop();
+    const phoneCanvas = canvasRef.current;
+    const laptopCanvas = laptopCanvasRef.current;
+    if (!previous || !phoneCanvas) return;
+    phoneCanvas.getContext("2d")?.putImageData(previous.phone, 0, 0);
+    if (previous.laptop && laptopCanvas) laptopCanvas.getContext("2d")?.putImageData(previous.laptop, 0, 0);
+    strokes.current.pop();
+    setInked(undoStack.current.length > 0);
+    notify("Last stroke undone");
+  };
+
+  const insertLineBreak = () => {
+    setRecognizedText((current) => current.replace(/[ \t]+$/, "") + "\n");
+    notify("New line added");
+  };
+
+  const startSocketPairing = async () => {
+    const session = crypto.randomUUID().replaceAll("-", "");
+    const url = `${window.location.origin}/write?session=${session}`;
+    setPairing(true);
+    setPairingUrl(url);
+    setQrImage(await QRCodeGenerator.toDataURL(url, { width: 292, margin: 1 }));
+    socket.off("phone:connected"); socket.off("phone:disconnected"); socket.off("stroke"); socket.off("clear"); socket.off("enter");
+    socket.on("phone:connected", () => { setRemotePhone(true); setPairing(false); notify("Phone connected through socket"); });
+    socket.on("phone:disconnected", () => setRemotePhone(false));
+    socket.on("stroke", (payload) => {
+      const canvas = laptopCanvasRef.current;
+      const context = canvas?.getContext("2d");
+      if (!canvas || !context) return;
+      const rect = canvas.getBoundingClientRect();
+      context.beginPath();
+      context.moveTo(payload.from.x * rect.width, payload.from.y * rect.height);
+      context.lineTo(payload.to.x * rect.width, payload.to.y * rect.height);
+      context.globalCompositeOperation = payload.tool === "eraser" ? "destination-out" : "source-over";
+      context.strokeStyle = darkMode ? "#f1edf7" : "#29243b";
+      context.lineWidth = payload.tool === "eraser" ? 20 : 3;
+      context.lineCap = "round";
+      context.stroke();
+    });
+    socket.on("clear", clearInk);
+    socket.on("enter", insertLineBreak);
+    const join = () => socket.emit("join-session", { session, role: "laptop" });
+    socket.off("connect");
+    socket.on("connect", join);
+    if (!socket.connected) socket.connect(); else join();
+  };
+
+  const recognizeHandwriting = async (image: string) => {
+    if (recognitionInFlight.current) return false;
+    recognitionInFlight.current = true;
     setRefining(true);
-    window.setTimeout(() => {
+    setRecognitionError("");
+    try {
+      const response = await fetch("/api/recognize-handwriting", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image }) });
+      const result = await response.json();
+      let text = result.text as string | undefined;
+      let usedLocalOcr = false;
+
+      if (!response.ok) {
+        const Tesseract = await import("tesseract.js");
+        const worker = await Tesseract.createWorker("eng");
+        await worker.setParameters({
+          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
+          preserve_interword_spaces: "1",
+        });
+        const localResult = await worker.recognize(image);
+        await worker.terminate();
+        text = localResult.data.text.replace(/\s+/g, " ").trim();
+        if (localResult.data.confidence < 35) text = "";
+        usedLocalOcr = true;
+      }
+
+      if (!text) throw new Error("Local OCR could not confidently read that handwriting. Try writing the complete word a little larger.");
+      const formattedText = text.charAt(0).toUpperCase() + text.slice(1);
+      setRecognizedText((current) => {
+        if (!current) return formattedText;
+        if (current.endsWith("\n") || current.endsWith(" ")) return current + formattedText;
+        return `${current} ${formattedText}`;
+      });
+      notify(usedLocalOcr ? "Handwriting converted locally — no credits used" : "Handwriting converted to text");
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Recognition failed";
+      setRecognitionError(message === "Handwriting recognition is not configured." ? "Add OPENAI_API_KEY to .env.local, then restart the development server." : message);
+      notify(message);
+      return false;
+    } finally {
+      recognitionInFlight.current = false;
       setRefining(false);
+    }
+  };
+
+  const refine = () => {
+    const sourceCanvas = canvasRef.current;
+    if (!sourceCanvas) return;
+    const image = prepareInkImage(sourceCanvas);
+    if (!image) return;
+    void recognizeHandwriting(image).then((converted) => {
+      if (!converted) return;
+      clearInk();
       setRefined(true);
-      notify("Ink refined — math and structure detected");
-    }, 1200);
+    });
   };
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand-wrap">
-          <button className="icon-button mobile-menu" onClick={() => setSidebar(!sidebar)} aria-label="Toggle sidebar"><Icon name="menu" /></button>
-          <div className="brand-mark"><span /></div>
-          <span className="brand">InkFlow <b>AI</b></span>
-        </div>
-        <div className="sync"><span className="sync-dot" /><span>{phone ? "Live sync active" : "All changes saved locally"}</span></div>
-        <div className="top-actions">
-          <button className="icon-button" aria-label="Search"><Icon name="search" /></button>
-          <button className="icon-button" aria-label="Settings"><Icon name="settings" /></button>
-          <button className="avatar">KS</button>
-        </div>
-      </header>
+    <main className={`app-shell ${darkMode ? "dark-theme" : ""}`}>
+      <AppHeader phoneConnected={phone || remotePhone} onToggleSidebar={() => setSidebar(!sidebar)} darkMode={darkMode} onToggleTheme={toggleTheme} />
 
       <div className="main-grid">
-        <aside className={`sidebar ${sidebar ? "open" : ""}`}>
-          <button className="new-note" onClick={() => notify("New blank note created")}><Icon name="plus" size={18} /> New note</button>
-          <nav>
-            <p className="nav-label">Workspace</p>
-            <button className="nav-item active"><Icon name="edit" /> Notes <span>4</span></button>
-            <button className="nav-item"><Icon name="shapes" /> Diagrams</button>
-            <button className="nav-item"><Icon name="math" /> Equations</button>
-            <p className="nav-label with-space">Recent</p>
-            <button className="recent active"><i className="note-dot purple" /><span><b>Physics — Wave Motion</b><small>Edited just now</small></span></button>
-            <button className="recent"><i className="note-dot coral" /><span><b>Product brainstorm</b><small>Yesterday</small></span></button>
-            <button className="recent"><i className="note-dot yellow" /><span><b>Calculus notes</b><small>Jul 12</small></span></button>
-          </nav>
-          <div className="sidebar-bottom">
-            <div className="storage-line"><span>Local session</span><b>Not saved to cloud</b></div>
-            <div className="storage-bar"><i /></div>
-            <button className="upgrade" onClick={() => notify("Cloud saving is planned for V2")}><Icon name="cloud" /> Enable cloud saving <Icon name="chevron" size={15} /></button>
-          </div>
-        </aside>
+        <WorkspaceSidebar
+          open={sidebar}
+          isNewNote={isNewNote}
+          onNewNote={() => setIsNewNote(true)}
+          onOpenExisting={() => setIsNewNote(false)}
+          onCloudClick={() => notify("Cloud saving is planned for V2")}
+        />
 
         <section className="workspace">
           <div className="doc-head">
-            <div><div className="eyebrow"><span>Notes</span><Icon name="chevron" size={13} /><span>Physics</span></div><h1>Wave Motion & Oscillations</h1></div>
+            <div><div className="eyebrow"><span>Notes</span><Icon name="chevron" size={13} /><span>{isNewNote ? "New note" : "Physics"}</span></div><h1>{isNewNote ? "Untitled note" : "Wave Motion & Oscillations"}</h1></div>
             <div className="doc-actions">
-              <button className={`connection ${phone ? "connected" : ""}`} onClick={() => setPairing(true)}><Icon name={phone ? "wifi" : "scan"} size={18} />{phone ? "Phone connected" : "Connect phone"}</button>
+              <button className={`connection ${phone || remotePhone ? "connected" : ""}`} onClick={() => void startSocketPairing()}><Icon name={phone || remotePhone ? "wifi" : "scan"} size={18} />{phone || remotePhone ? "Phone connected" : "Connect phone"}</button>
               <button className="icon-button bordered" onClick={() => notify("Export prepared as PDF")} aria-label="Export"><Icon name="download" /></button>
               <button className="icon-button bordered" aria-label="More"><Icon name="more" /></button>
             </div>
           </div>
 
-          <div className="toolbar">
+          {!isNewNote && <div className="toolbar">
             <div className="tool-group">
               <button className="tool active"><Icon name="pen" /></button><button className="tool"><Icon name="text" /></button><button className="tool"><Icon name="eraser" /></button>
             </div>
@@ -198,10 +372,12 @@ export default function InkflowWorkspace() {
             <button className="tool"><Icon name="undo" /></button><button className="tool faded"><Icon name="redo" /></button>
             <span className="toolbar-spacer" />
             <button className="ai-button" onClick={() => { setRefined(true); notify("Note cleaned and organized"); }}><Icon name="sparkle" size={17} /> Refine page</button>
-          </div>
+          </div>}
 
           <div className="paper-wrap">
+            {isNewNote ? <BlankNoteSheet phoneConnected={phone || remotePhone} onConnectPhone={() => void startSocketPairing()} remoteCanvasRef={laptopCanvasRef} recognizedText={recognizedText} recognizing={refining} onRecognize={recognizeHandwriting} onTextChange={setRecognizedText} recognitionError={recognitionError} darkMode={darkMode} onEnter={insertLineBreak} /> :
             <article className={`paper ${font === "Clean Print" ? "clean-font" : font === "Study Script" ? "study-font" : ""}`}>
+              <canvas ref={laptopCanvasRef} className="remote-ink-canvas full-page-ink" aria-label="Handwriting received from phone" />
               <div className="paper-date">16 JULY 2026 <span>•</span> PHYSICS</div>
               <h2>Wave Motion</h2>
               <p className="lead">A wave is a disturbance that transfers <mark>energy</mark> from one place to another without transferring matter.</p>
@@ -218,7 +394,7 @@ export default function InkflowWorkspace() {
               </div>
               {refined && <div className="fresh-note"><span><Icon name="sparkle" size={16} /></span><div><b>AI refinement complete</b><p>Spacing corrected · equation detected · diagram aligned</p></div><button onClick={() => setRefined(false)}><Icon name="x" size={16} /></button></div>}
               <div className="page-number">1</div>
-            </article>
+            </article>}
           </div>
         </section>
       </div>
@@ -229,8 +405,8 @@ export default function InkflowWorkspace() {
           <div className="pair-icon"><Icon name="scan" size={24} /></div>
           <h2>Turn your phone into a writing pad</h2>
           <p>Scan this code with your phone camera. No app or account needed.</p>
-          <div className="qr-frame"><QRCode /><i className="qr-logo"><span /></i></div>
-          <div className="pair-code"><span>or enter</span><b>INK–7K2</b><button onClick={() => notify("Pairing code copied")}>Copy</button></div>
+          <div className="qr-frame">{qrImage ? <Image unoptimized className="real-qr" src={qrImage} alt="Scan to connect your phone" width={146} height={146} /> : <QRCode />}<i className="qr-logo"><span /></i></div>
+          <div className="pair-code"><span>Socket session</span><b>{pairingUrl.split("=").at(-1)?.slice(0, 6).toUpperCase()}</b><button onClick={() => { if (pairingUrl) void navigator.clipboard.writeText(pairingUrl); notify("Pairing link copied"); }}>Copy link</button></div>
           <div className="secure-note"><span /><div><b>Private, temporary connection</b><small>This session disappears when you disconnect.</small></div></div>
           <button className="simulate" onClick={() => { setPhone(true); setPairing(false); window.setTimeout(() => setPhone(true), 200); }}>Preview connected phone <Icon name="arrow" size={17} /></button>
         </section>
@@ -238,7 +414,7 @@ export default function InkflowWorkspace() {
 
       {phone && <div className="phone-panel">
         <div className="phone-head"><div><span className="live-dot" /><span><b>Connected</b><small>Wave Motion & Oscillations</small></span></div><button onClick={() => setPhone(false)}><Icon name="x" /></button></div>
-        <div className="phone-tools"><button className={tool === "pen" ? "active" : ""} onClick={() => setTool("pen")}><Icon name="pen" /></button><button className={tool === "eraser" ? "active" : ""} onClick={() => setTool("eraser")}><Icon name="eraser" /></button><button onClick={clearInk}><Icon name="x" /></button><span /><button><Icon name="undo" /></button></div>
+        <div className="phone-tools"><button className={tool === "pen" ? "active" : ""} onClick={() => setTool("pen")}><Icon name="pen" /></button><button className={tool === "eraser" ? "active" : ""} onClick={() => setTool("eraser")}><Icon name="eraser" /></button><button onClick={clearInk}><Icon name="x" /></button><button className="phone-enter" onClick={insertLineBreak} aria-label="Start a new line">↵</button><span /><button onClick={undoInk} disabled={!inked} aria-label="Undo last stroke"><Icon name="undo" /></button></div>
         <div className="canvas-wrap"><div className="canvas-hint">{inked ? "Pause when you’re done" : "Write here with your finger or stylus"}</div><canvas ref={canvasRef} onPointerDown={startInk} onPointerMove={moveInk} onPointerUp={() => drawing.current = false} onPointerCancel={() => drawing.current = false} /></div>
         <div className="phone-foot"><div><span className={inked ? "pulse" : ""} /><p><b>{inked ? "Ink captured" : "Ready to write"}</b><small>{inked ? "Waiting for your pause…" : "Your strokes stay in this session"}</small></p></div><button disabled={!inked || refining} onClick={refine}>{refining ? <span className="spinner" /> : <Icon name="sparkle" size={17} />}{refining ? "Refining" : "Refine ink"}</button></div>
       </div>}

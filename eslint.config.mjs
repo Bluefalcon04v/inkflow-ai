@@ -9,6 +9,7 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    ".inkflow-next/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
