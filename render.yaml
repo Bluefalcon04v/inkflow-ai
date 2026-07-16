@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: inkflow-ai
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: corepack enable && yarn install --immutable && yarn build
+    startCommand: yarn start
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: NODE_ENV
+        value: production

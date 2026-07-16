@@ -1,5 +1,16 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Deploy on Render
+
+This repository includes a `render.yaml` Blueprint for the Socket.IO-enabled custom Node server.
+
+1. Push the repository to GitHub.
+2. In Render, choose **New → Blueprint**.
+3. Connect the repository and apply the detected `render.yaml`.
+4. Open the generated `onrender.com` URL after the first deploy.
+
+The service uses Render's free web-service plan, builds with Yarn, starts through `server.mjs`, and checks `/api/health`. No Supabase configuration is required.
+
 ## Getting Started
 
 First, run the development server:
