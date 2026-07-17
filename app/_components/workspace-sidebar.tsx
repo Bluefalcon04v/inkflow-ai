@@ -3,25 +3,23 @@ import { Icon } from "../inkflow-workspace";
 type WorkspaceSidebarProps = {
   open: boolean;
   isNewNote: boolean;
+  mode: "notes" | "sketch";
   onNewNote: () => void;
-  onOpenExisting: () => void;
+  onModeChange: (mode: "notes" | "sketch") => void;
   onCloudClick: () => void;
 };
 
-export function WorkspaceSidebar({ open, isNewNote, onNewNote, onOpenExisting, onCloudClick }: WorkspaceSidebarProps) {
+export function WorkspaceSidebar({ open, isNewNote, mode, onNewNote, onModeChange, onCloudClick }: WorkspaceSidebarProps) {
   return (
     <aside className={`sidebar ${open ? "open" : ""}`}>
-      <button className="new-note" onClick={onNewNote}><Icon name="plus" size={18} /> New note</button>
+      <button className="new-note" onClick={() => mode === "notes" ? onNewNote() : onModeChange("sketch")}><Icon name="plus" size={18} /> {mode === "notes" ? "New note" : "New sketch"}</button>
       <nav>
         <p className="nav-label">Workspace</p>
-        <button className="nav-item active"><Icon name="edit" /> Notes <span>{isNewNote ? 5 : 4}</span></button>
-        <button className="nav-item"><Icon name="shapes" /> Diagrams</button>
-        <button className="nav-item"><Icon name="math" /> Equations</button>
+        <button className={`nav-item ${mode === "notes" ? "active" : ""}`} onClick={() => onModeChange("notes")}><Icon name="edit" /> Notes</button>
+        <button className={`nav-item ${mode === "sketch" ? "active" : ""}`} onClick={() => onModeChange("sketch")}><Icon name="shapes" /> Sketch Studio</button>
         <p className="nav-label with-space">Recent</p>
-        {isNewNote && <button className="recent active"><i className="note-dot lavender" /><span><b>Untitled note</b><small>Editing now</small></span></button>}
-        <button className={`recent ${isNewNote ? "" : "active"}`} onClick={onOpenExisting}><i className="note-dot purple" /><span><b>Physics — Wave Motion</b><small>Edited just now</small></span></button>
-        <button className="recent"><i className="note-dot coral" /><span><b>Product brainstorm</b><small>Yesterday</small></span></button>
-        <button className="recent"><i className="note-dot yellow" /><span><b>Calculus notes</b><small>Jul 12</small></span></button>
+        {mode === "notes" && isNewNote && <div className="recent active"><i className="note-dot lavender" /><span><b>Untitled note</b><small>Editing now</small></span></div>}
+        {mode === "sketch" && <div className="recent active"><i className="note-dot coral" /><span><b>Untitled sketch</b><small>Live canvas</small></span></div>}
       </nav>
       <div className="sidebar-bottom">
         <div className="storage-line"><span>Local session</span><b>Not saved to cloud</b></div>
