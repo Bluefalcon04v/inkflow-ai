@@ -4,6 +4,7 @@ services:
     runtime: node
     plan: free
     region: singapore
+    rootDir: .
     buildCommand: corepack enable && yarn install --immutable && yarn build
     startCommand: yarn start
     healthCheckPath: /api/health
