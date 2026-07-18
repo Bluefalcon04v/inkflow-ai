@@ -1,0 +1,7 @@
+[build]
+  base = "/"
+  command = "yarn build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
