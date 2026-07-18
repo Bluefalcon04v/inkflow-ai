@@ -1,6 +1,5 @@
 [build]
-  base = "/"
-  command = "yarn build"
+  command = "yarn install --immutable && yarn build"
   publish = ".next"
 
 [build.environment]
