@@ -258,7 +258,6 @@ export default function InkflowWorkspace() {
   const laptopCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const lastPoint = useRef({ x: 0, y: 0 });
-  const pauseTimer = useRef<number | null>(null);
   const strokes = useRef<
     Array<{ tool: "pen" | "eraser"; points: Array<{ x: number; y: number }> }>
   >([]);
@@ -271,7 +270,6 @@ export default function InkflowWorkspace() {
     Array<{ phone: ImageData; laptop: ImageData | null }>
   >([]);
   const remoteUndoStack = useRef<ImageData[]>([]);
-  const remoteRecognitionTimer = useRef<number | null>(null);
   const remoteInkVersion = useRef(0);
   const [sidebar, setSidebar] = useState(true);
   const [pairing, setPairing] = useState(false);
@@ -407,7 +405,6 @@ export default function InkflowWorkspace() {
       });
       if (undoStack.current.length > 20) undoStack.current.shift();
     }
-    if (pauseTimer.current) window.clearTimeout(pauseTimer.current);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -469,21 +466,22 @@ export default function InkflowWorkspace() {
     lastPoint.current = next;
     setInked(true);
     setRefined(false);
-    if (pauseTimer.current) window.clearTimeout(pauseTimer.current);
-    pauseTimer.current = window.setTimeout(() => refine(), 4000);
   };
 
   const clearInk = () => {
-    if (remoteRecognitionTimer.current)
-      window.clearTimeout(remoteRecognitionTimer.current);
-    remoteRecognitionTimer.current = null;
     remoteInkVersion.current += 1;
     const canvas = canvasRef.current;
-    canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    if (canvas) {
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = canvas.width;
+      canvas.getContext("2d")?.scale(ratio, ratio);
+    }
     const laptopCanvas = laptopCanvasRef.current;
-    laptopCanvas
-      ?.getContext("2d")
-      ?.clearRect(0, 0, laptopCanvas.width, laptopCanvas.height);
+    if (laptopCanvas) {
+      const ratio = window.devicePixelRatio || 1;
+      laptopCanvas.width = laptopCanvas.width;
+      laptopCanvas.getContext("2d")?.scale(ratio, ratio);
+    }
     strokes.current = [];
     undoStack.current = [];
     remoteUndoStack.current = [];
@@ -551,9 +549,9 @@ export default function InkflowWorkspace() {
 
   const recognizeRemoteInk = async () => {
     const canvas = laptopCanvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return false;
     const image = prepareInkImage(canvas);
-    if (!image) return;
+    if (!image) return false;
     const versionBeingRead = remoteInkVersion.current;
     const converted = await recognizeHandwriting(image);
 
@@ -561,8 +559,9 @@ export default function InkflowWorkspace() {
     if (converted && versionBeingRead === remoteInkVersion.current) {
       canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
       remoteUndoStack.current = [];
+      setSketchUndoCount(0);
       socket.emit("clear", { reason: "converted" });
-      return;
+      return true;
     }
 
     // Recognition can be busy with another request. Retry the latest ink after it settles.
@@ -570,17 +569,9 @@ export default function InkflowWorkspace() {
       versionBeingRead !== remoteInkVersion.current ||
       recognitionInFlight.current
     ) {
-      scheduleRemoteRecognition();
+      // New strokes remain on the canvas until the user explicitly enhances them.
     }
-  };
-
-  const scheduleRemoteRecognition = () => {
-    if (remoteRecognitionTimer.current)
-      window.clearTimeout(remoteRecognitionTimer.current);
-    remoteRecognitionTimer.current = window.setTimeout(() => {
-      remoteRecognitionTimer.current = null;
-      void recognizeRemoteInk();
-    }, 4000);
+    return false;
   };
 
   const startSocketPairing = async () => {
@@ -596,6 +587,8 @@ export default function InkflowWorkspace() {
     socket.off("undo");
     socket.off("clear");
     socket.off("enter");
+    socket.off("enhance-note");
+    socket.off("enhance-sketch");
     socket.on("phone:connected", () => {
       setRemotePhone(true);
       setPairing(false);
@@ -603,8 +596,6 @@ export default function InkflowWorkspace() {
     });
     socket.on("phone:disconnected", () => setRemotePhone(false));
     socket.on("stroke:start", () => {
-      if (remoteRecognitionTimer.current)
-        window.clearTimeout(remoteRecognitionTimer.current);
       const canvas = laptopCanvasRef.current;
       const context = canvas?.getContext("2d");
       if (canvas && context) {
@@ -656,15 +647,30 @@ export default function InkflowWorkspace() {
         context.stroke();
         context.globalAlpha = 1;
         remoteInkVersion.current += 1;
-        if (modeRef.current === "notes") scheduleRemoteRecognition();
       }
     );
     socket.on("undo", () => {
       undoRemoteSketch(false);
-      if (modeRef.current === "notes") scheduleRemoteRecognition();
     });
     socket.on("clear", clearInk);
     socket.on("enter", insertLineBreak);
+    socket.on("enhance-note", async () => {
+      if (modeRef.current !== "notes") return;
+      const converted = await recognizeRemoteInk();
+      socket.emit("enhance-note-result", { converted });
+    });
+    socket.on(
+      "enhance-sketch",
+      async (payload?: { mode?: "local" | "cloud" }) => {
+        if (modeRef.current !== "sketch") return;
+        const enhancementMode = payload?.mode === "local" ? "local" : "cloud";
+        const enhanced = await enhanceSketch(enhancementMode);
+        socket.emit("enhance-sketch-result", {
+          enhanced,
+          mode: enhancementMode,
+        });
+      }
+    );
     const join = () => socket.emit("join-session", { session, role: "laptop" });
     socket.off("connect");
     socket.on("connect", join);
@@ -690,7 +696,7 @@ export default function InkflowWorkspace() {
       setSketchError(
         "Draw something on your phone before using AI enhancement."
       );
-      return;
+      return false;
     }
     setEnhancingSketchMode(enhancementMode);
     setSketchError("");
@@ -709,7 +715,7 @@ export default function InkflowWorkspace() {
       if (enhancementMode === "local") {
         setEnhancedSketch(flattened.toDataURL("image/png"));
         notify("Sketch polished locally — nothing was uploaded");
-        return;
+        return true;
       }
       const response = await fetch("/api/enhance-sketch", {
         method: "POST",
@@ -721,12 +727,14 @@ export default function InkflowWorkspace() {
         throw new Error(result.error ?? "The sketch could not be enhanced.");
       setEnhancedSketch(result.image);
       notify("Your sketch has been elevated");
+      return true;
     } catch (error) {
       setSketchError(
         error instanceof Error
           ? error.message
           : "The sketch could not be enhanced."
       );
+      return false;
     } finally {
       setEnhancingSketchMode(null);
     }
@@ -964,6 +972,8 @@ export default function InkflowWorkspace() {
                 remoteCanvasRef={laptopCanvasRef}
                 recognizedText={recognizedText}
                 recognizing={refining}
+                canEnhance={sketchUndoCount > 0}
+                onEnhance={() => void recognizeRemoteInk()}
                 onTextChange={setRecognizedText}
                 recognitionError={recognitionError}
               />
@@ -1179,7 +1189,7 @@ export default function InkflowWorkspace() {
                 <b>{inked ? "Ink captured" : "Ready to write"}</b>
                 <small>
                   {inked
-                    ? "Waiting for your pause…"
+                    ? "Ready when you are"
                     : "Your strokes stay in this session"}
                 </small>
               </p>
@@ -1190,7 +1200,7 @@ export default function InkflowWorkspace() {
               ) : (
                 <Icon name="sparkle" size={17} />
               )}
-              {refining ? "Refining" : "Refine ink"}
+              {refining ? "Enhancing" : "Enhance notes"}
             </button>
           </div>
         </div>

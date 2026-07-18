@@ -12,7 +12,17 @@ await app.prepare();
 
 const httpServer = createServer((request, response) => handle(request, response));
 const io = new Server(httpServer, { cors: { origin: dev ? true : false } });
-const forwardedEvents = ["stroke:start", "stroke", "undo", "clear", "enter"];
+const forwardedEvents = [
+  "stroke:start",
+  "stroke",
+  "undo",
+  "clear",
+  "enter",
+  "enhance-note",
+  "enhance-note-result",
+  "enhance-sketch",
+  "enhance-sketch-result",
+];
 
 io.on("connection", (client) => {
   client.on("join-session", ({ session, role }) => {

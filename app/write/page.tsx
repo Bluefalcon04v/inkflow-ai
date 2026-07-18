@@ -18,6 +18,9 @@ function MobileWriter() {
   const [tool, setTool] = useState<"pen" | "marker" | "eraser">("pen");
   const [color, setColor] = useState("#24203a");
   const [width, setWidth] = useState(4);
+  const [hasInk, setHasInk] = useState(false);
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhancingSketch, setEnhancingSketch] = useState<"local" | "cloud" | null>(null);
   const colors = [
     "#24203a",
     "#7357dd",
@@ -27,6 +30,14 @@ function MobileWriter() {
     "#2586d9",
     "#ffffff",
   ];
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = canvas.width;
+    canvas.getContext("2d")?.scale(ratio, ratio);
+  };
 
   const undoLocalStroke = () => {
     const canvas = canvasRef.current;
@@ -48,18 +59,38 @@ function MobileWriter() {
     };
     const disconnected = () => setStatus("Reconnecting…");
     const clearAfterConversion = (payload?: { reason?: string }) => {
-      const canvas = canvasRef.current;
-      if (canvas)
-        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      clearCanvas();
       undoStack.current = [];
+      setHasInk(false);
+      setEnhancing(false);
       if (payload?.reason === "converted" && mode === "notes")
         setStatus("Converted — ready for your next note");
     };
     const undoFromLaptop = () => undoLocalStroke();
+    const enhancementResult = (payload?: { converted?: boolean }) => {
+      if (payload?.converted) return;
+      setEnhancing(false);
+      setStatus("Could not enhance — try again");
+    };
+    const sketchEnhancementResult = (payload?: {
+      enhanced?: boolean;
+      mode?: "local" | "cloud";
+    }) => {
+      setEnhancingSketch(null);
+      setStatus(
+        payload?.enhanced
+          ? payload.mode === "local"
+            ? "Polished locally on laptop"
+            : "AI enhancement complete"
+          : "Could not enhance — try again"
+      );
+    };
     socket.on("connect", connected);
     socket.on("disconnect", disconnected);
     socket.on("clear", clearAfterConversion);
     socket.on("undo", undoFromLaptop);
+    socket.on("enhance-note-result", enhancementResult);
+    socket.on("enhance-sketch-result", sketchEnhancementResult);
     if (!socket.connected) socket.connect();
     else connected();
     return () => {
@@ -67,6 +98,8 @@ function MobileWriter() {
       socket.off("disconnect", disconnected);
       socket.off("clear", clearAfterConversion);
       socket.off("undo", undoFromLaptop);
+      socket.off("enhance-note-result", enhancementResult);
+      socket.off("enhance-sketch-result", sketchEnhancementResult);
       socket.disconnect();
     };
   }, [mode, session]);
@@ -104,6 +137,7 @@ function MobileWriter() {
       if (undoStack.current.length > 20) undoStack.current.shift();
     }
     drawing.current = true;
+    setHasInk(true);
     previous.current = point(event);
     event.currentTarget.setPointerCapture(event.pointerId);
     socket.emit("stroke:start", {});
@@ -147,6 +181,22 @@ function MobileWriter() {
     previous.current = next;
   };
   const command = (event: "undo" | "clear" | "enter") => socket.emit(event, {});
+  const enhanceNote = () => {
+    if (!hasInk || enhancing) return;
+    setEnhancing(true);
+    setStatus("Enhancing on laptop…");
+    socket.emit("enhance-note", {});
+  };
+  const enhanceSketch = (enhancementMode: "local" | "cloud") => {
+    if (!hasInk || enhancingSketch) return;
+    setEnhancingSketch(enhancementMode);
+    setStatus(
+      enhancementMode === "local"
+        ? "Polishing locally on laptop…"
+        : "Enhancing with Gemini AI…"
+    );
+    socket.emit("enhance-sketch", { mode: enhancementMode });
+  };
 
   return (
     <main className={`mobile-writer ${mode === "sketch" ? "mobile-sketch-studio" : "mobile-notes-writer"}`}>
@@ -197,12 +247,9 @@ function MobileWriter() {
         </button>
         <button
           onClick={() => {
-            const canvas = canvasRef.current;
-            if (canvas)
-              canvas
-                .getContext("2d")
-                ?.clearRect(0, 0, canvas.width, canvas.height);
+            clearCanvas();
             undoStack.current = [];
+            setHasInk(false);
             command("clear");
           }}
         >
@@ -246,9 +293,37 @@ function MobileWriter() {
       />
       <p>
         {mode === "sketch"
-          ? "Draw freely with your finger or stylus. AI will only run when you choose Elevate with AI on the laptop."
+          ? "Draw freely, then polish locally or enhance with Gemini AI when you choose."
           : "Write with your finger or stylus. Your strokes appear live on the laptop."}
       </p>
+      {mode === "notes" && (
+        <div className="mobile-enhance-bar">
+          <button onClick={enhanceNote} disabled={!hasInk || enhancing}>
+            <span>✦</span> {enhancing ? "Enhancing…" : "Enhance notes"}
+          </button>
+          <small>Nothing is refined until you tap Enhance.</small>
+        </div>
+      )}
+      {mode === "sketch" && (
+        <div className="mobile-sketch-enhance-bar">
+          <button
+            className="mobile-local-enhance"
+            onClick={() => enhanceSketch("local")}
+            disabled={!hasInk || enhancingSketch !== null}
+          >
+            <span>✦</span>
+            {enhancingSketch === "local" ? "Polishing…" : "Polish locally"}
+          </button>
+          <button
+            className="mobile-ai-enhance"
+            onClick={() => enhanceSketch("cloud")}
+            disabled={!hasInk || enhancingSketch !== null}
+          >
+            <span>✦</span>
+            {enhancingSketch === "cloud" ? "Enhancing…" : "Enhance with AI"}
+          </button>
+        </div>
+      )}
     </main>
   );
 }
