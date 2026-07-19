@@ -6,6 +6,31 @@ import { socket } from "../_lib/socket-client";
 
 type Point = { x: number; y: number };
 
+type MobileToolIconName =
+  | "pen"
+  | "marker"
+  | "eraser"
+  | "enter"
+  | "undo"
+  | "clear";
+
+function MobileToolIcon({ name }: { name: MobileToolIconName }) {
+  const paths: Record<MobileToolIconName, React.ReactNode> = {
+    pen: <><path d="m4 20 4.2-1 10.5-10.5a2.1 2.1 0 0 0-3-3L5.2 16Z" /><path d="m14.5 6.5 3 3" /></>,
+    marker: <><path d="m9 11 6 6" /><path d="m4 20 4.5-1.5L19 8a2.1 2.1 0 0 0-3-3L5.5 15.5Z" /><path d="M13 20h7" /></>,
+    eraser: <><path d="m7 20-3-3a2 2 0 0 1 0-2.8L14.2 4a2 2 0 0 1 2.8 0l3 3a2 2 0 0 1 0 2.8L9.8 20Z" /><path d="m12 6 6 6" /><path d="M7 20h13" /></>,
+    enter: <><path d="M20 5v6a3 3 0 0 1-3 3H5" /><path d="m9 10-4 4 4 4" /></>,
+    undo: <><path d="m9 7-5 5 5 5" /><path d="M4 12h9a7 7 0 0 1 7 7" /></>,
+    clear: <><path d="M5 5l14 14" /><path d="M19 5 5 19" /></>,
+  };
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  );
+}
+
 function MobileWriter() {
   const searchParams = useSearchParams();
   const session = searchParams.get("session");
@@ -193,7 +218,7 @@ function MobileWriter() {
     setStatus(
       enhancementMode === "local"
         ? "Polishing locally on laptop…"
-        : "Enhancing with Gemini AI…"
+        : "Local cleanup → Pixazo image…"
     );
     socket.emit("enhance-sketch", { mode: enhancementMode });
   };
@@ -209,33 +234,61 @@ function MobileWriter() {
             </b>
             <small>{status}</small>
           </span>
-          {mode === "sketch" && <em>LIVE ARTBOARD</em>}
+          {mode === "sketch" && (
+            <div className="mobile-sketch-header-actions">
+              <em>LIVE</em>
+              <button
+                className="mobile-header-local"
+                onClick={() => enhanceSketch("local")}
+                disabled={!hasInk || enhancingSketch !== null}
+              >
+                ✦ {enhancingSketch === "local" ? "Polishing…" : "Local"}
+              </button>
+              <button
+                className="mobile-header-ai"
+                onClick={() => enhanceSketch("cloud")}
+                disabled={!hasInk || enhancingSketch !== null}
+              >
+                ✦ {enhancingSketch === "cloud" ? "Enhancing…" : "Enhance"}
+              </button>
+            </div>
+          )}
+          {mode === "notes" && (
+            <button
+              className="mobile-header-enhance"
+              onClick={enhanceNote}
+              disabled={!hasInk || enhancing}
+            >
+              ✦ {enhancing ? "Enhancing…" : "Enhance"}
+            </button>
+          )}
         </div>
       </header>
-      {mode === "sketch" && <div className="mobile-sketch-heading"><span>Draw on your phone</span><small>Your strokes appear instantly on the laptop canvas</small></div>}
       <div className="mobile-writer-tools">
         <button
           className={tool === "pen" ? "active" : ""}
           onClick={() => setTool("pen")}
         >
-          ✎ Pen
+          <MobileToolIcon name="pen" /><span>Pen</span>
         </button>
         {mode === "sketch" && (
           <button
             className={tool === "marker" ? "active" : ""}
             onClick={() => setTool("marker")}
           >
-            ▰ Marker
+            <MobileToolIcon name="marker" /><span>Marker</span>
           </button>
         )}
         <button
           className={tool === "eraser" ? "active" : ""}
           onClick={() => setTool("eraser")}
         >
-          ⌫ Erase
+          <MobileToolIcon name="eraser" /><span>Erase</span>
         </button>
         {mode === "notes" && (
-          <button onClick={() => command("enter")}>↵ Enter</button>
+          <button onClick={() => command("enter")}>
+            <MobileToolIcon name="enter" /><span>Enter</span>
+          </button>
         )}
         <button
           onClick={() => {
@@ -243,7 +296,7 @@ function MobileWriter() {
             command("undo");
           }}
         >
-          ↶ Undo
+          <MobileToolIcon name="undo" /><span>Undo</span>
         </button>
         <button
           onClick={() => {
@@ -253,7 +306,7 @@ function MobileWriter() {
             command("clear");
           }}
         >
-          Clear
+          <MobileToolIcon name="clear" /><span>Clear</span>
         </button>
       </div>
       {mode === "sketch" && (
@@ -293,37 +346,9 @@ function MobileWriter() {
       />
       <p>
         {mode === "sketch"
-          ? "Draw freely, then polish locally or enhance with Gemini AI when you choose."
+          ? "Draw freely, then polish locally or create a detailed image with Pixazo."
           : "Write with your finger or stylus. Your strokes appear live on the laptop."}
       </p>
-      {mode === "notes" && (
-        <div className="mobile-enhance-bar">
-          <button onClick={enhanceNote} disabled={!hasInk || enhancing}>
-            <span>✦</span> {enhancing ? "Enhancing…" : "Enhance notes"}
-          </button>
-          <small>Nothing is refined until you tap Enhance.</small>
-        </div>
-      )}
-      {mode === "sketch" && (
-        <div className="mobile-sketch-enhance-bar">
-          <button
-            className="mobile-local-enhance"
-            onClick={() => enhanceSketch("local")}
-            disabled={!hasInk || enhancingSketch !== null}
-          >
-            <span>✦</span>
-            {enhancingSketch === "local" ? "Polishing…" : "Polish locally"}
-          </button>
-          <button
-            className="mobile-ai-enhance"
-            onClick={() => enhanceSketch("cloud")}
-            disabled={!hasInk || enhancingSketch !== null}
-          >
-            <span>✦</span>
-            {enhancingSketch === "cloud" ? "Enhancing…" : "Enhance with AI"}
-          </button>
-        </div>
-      )}
     </main>
   );
 }

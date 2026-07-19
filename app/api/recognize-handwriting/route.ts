@@ -1,7 +1,34 @@
 import { NextResponse } from "next/server";
 
+type OcrSpaceParsedResult = {
+  ParsedText?: string;
+  ErrorMessage?: string;
+  ErrorDetails?: string;
+};
+
+type OcrSpaceResponse = {
+  ParsedResults?: OcrSpaceParsedResult[];
+  OCRExitCode?: number;
+  IsErroredOnProcessing?: boolean;
+  ErrorMessage?: string | string[];
+  ErrorDetails?: string | string[];
+};
+
+const MAX_FREE_TIER_BYTES = 1024 * 1024;
+
+function firstMessage(...values: Array<string | string[] | undefined>) {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const message = value.find(Boolean);
+      if (message) return message;
+    } else if (value) {
+      return value;
+    }
+  }
+}
+
 export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OCR_SPACE_API_KEY;
   if (!apiKey)
     return NextResponse.json(
       { error: "Handwriting recognition is not configured." },
@@ -15,112 +42,71 @@ export async function POST(request: Request) {
       { status: 400 }
     );
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_VISION_MODEL ?? "gpt-4o-mini",
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "Transcribe all handwriting, including long paragraphs. Use the surrounding sentence, grammar, topic, and visible letter shapes to reconstruct the writer's intended words. When a word has a reasonable interpretation, output the most likely correctly spelled word directly in the text; do not mark it unclear merely because one letter is messy. Put such lower-confidence but reasonable guesses in hints with the line number, chosen word or letter, and a short explanation. Use [unclear: unreadable word] in the text and add an unclear entry only when no reasonable word or letter can be inferred at all. Keep every readable part, correct spelling, spacing, grammar, and capitalization, and preserve intentional line breaks. A single handwritten letter is valid.",
-            },
-            { type: "input_image", image_url: image },
-          ],
-        },
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "handwriting_transcription",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              text: { type: "string" },
-              hints: {
-                type: "array",
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    line: { type: "integer" },
-                    characters: { type: "string" },
-                    guidance: { type: "string" },
-                  },
-                  required: ["line", "characters", "guidance"],
-                },
-              },
-              unclear: {
-                type: "array",
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    line: { type: "integer" },
-                    characters: { type: "string" },
-                    guidance: { type: "string" },
-                  },
-                  required: ["line", "characters", "guidance"],
-                },
-              },
-            },
-            required: ["text", "hints", "unclear"],
-          },
-        },
-      },
-    }),
-  });
-  if (!response.ok) {
-    const upstream = await response.json().catch(() => null);
-    const code = upstream?.error?.code;
-    const message =
-      code === "insufficient_quota"
-        ? "OpenAI API quota is unavailable. Add billing or credits to this API project."
-        : response.status === 401
-        ? "The OpenAI API key is invalid or inactive."
-        : code === "model_not_found"
-        ? "The configured recognition model is unavailable to this API project."
-        : "The handwriting recognition service could not process this request.";
+  const base64 = image.slice(image.indexOf(",") + 1);
+  const imageBytes = Math.ceil((base64.length * 3) / 4);
+  if (imageBytes > MAX_FREE_TIER_BYTES)
     return NextResponse.json(
-      { error: message, code },
-      { status: response.status }
+      { error: "The canvas image exceeds OCR.space's 1 MB free-plan limit." },
+      { status: 413 }
+    );
+
+  const form = new FormData();
+  form.set("base64Image", image);
+  form.set("language", "auto");
+  form.set("OCREngine", "3");
+  form.set("isOverlayRequired", "false");
+  form.set("scale", "true");
+
+  let response: Response;
+  try {
+    response = await fetch("https://api.ocr.space/parse/image", {
+      method: "POST",
+      headers: { apikey: apiKey },
+      body: form,
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "OCR.space could not be reached. Please try again." },
+      { status: 502 }
     );
   }
 
-  const result = await response.json();
-  const outputText = result.output
-    ?.flatMap(
-      (item: { content?: Array<{ type?: string; text?: string }> }) =>
-        item.content ?? []
-    )
-    .find((item: { type?: string }) => item.type === "output_text")
-    ?.text?.trim();
-  if (!outputText)
+  const result = (await response.json().catch(() => null)) as
+    | OcrSpaceResponse
+    | null;
+  const parsed = result?.ParsedResults?.[0];
+
+  if (!response.ok || !result || result.IsErroredOnProcessing || !parsed) {
+    const upstreamMessage = firstMessage(
+      result?.ErrorMessage,
+      result?.ErrorDetails,
+      parsed?.ErrorMessage,
+      parsed?.ErrorDetails
+    );
+    const invalidKey =
+      response.status === 401 || /api.?key/i.test(upstreamMessage ?? "");
+    const rateLimited =
+      response.status === 429 ||
+      /limit|quota|conversions/i.test(upstreamMessage ?? "");
+    const message = invalidKey
+      ? "The OCR.space API key is invalid or inactive."
+      : rateLimited
+        ? "The OCR.space free-tier request limit has been reached."
+        : upstreamMessage || "OCR.space could not process this image.";
+
+    return NextResponse.json(
+      { error: message, code: result?.OCRExitCode },
+      { status: response.ok ? 422 : response.status }
+    );
+  }
+
+  const text = parsed.ParsedText?.trim();
+  if (!text)
     return NextResponse.json(
       { error: "No handwriting was detected." },
       { status: 422 }
     );
-  const transcription = JSON.parse(outputText) as {
-    text?: string;
-    hints?: Array<{ line: number; characters: string; guidance: string }>;
-    unclear?: Array<{ line: number; characters: string; guidance: string }>;
-  };
-  if (!transcription.text)
-    return NextResponse.json(
-      { error: "No handwriting was detected." },
-      { status: 422 }
-    );
-  return NextResponse.json({
-    text: transcription.text,
-    hints: transcription.hints ?? [],
-    unclear: transcription.unclear ?? [],
-  });
+
+  return NextResponse.json({ text, hints: [], unclear: [] });
 }

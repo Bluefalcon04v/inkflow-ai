@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="inkflow" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9277F2"/>
+      <stop offset="1" stop-color="#5D42C5"/>
+    </linearGradient>
+  </defs>
+  <rect x="5" y="5" width="54" height="54" rx="15" fill="url(#inkflow)"/>
+  <g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="6">
+    <path d="M20 17v30"/>
+    <path d="M32 22v25"/>
+    <path d="M44 29v18"/>
+  </g>
+</svg>

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppHeader } from "./_components/app-header";
 import { BlankNoteSheet } from "./_components/blank-note-sheet";
 import { SketchStudio } from "./_components/sketch-studio";
 import { WorkspaceSidebar } from "./_components/workspace-sidebar";
@@ -253,6 +252,36 @@ async function copyText(text: string) {
   if (!copied) throw new Error("Copy is not supported by this browser");
 }
 
+function downloadFile(url: string, filename: string) {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+}
+
+function fileSafeTitle(title: string, fallback: string) {
+  return (
+    title
+      .trim()
+      .replace(/[^a-z0-9-_ ]/gi, "")
+      .replace(/\s+/g, "-")
+      .slice(0, 60) || fallback
+  );
+}
+
+function currentNoteTimestamp() {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date());
+}
+
 export default function InkflowWorkspace() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const laptopCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -266,6 +295,7 @@ export default function InkflowWorkspace() {
     points: Array<{ x: number; y: number }>;
   } | null>(null);
   const recognitionInFlight = useRef(false);
+  const sketchSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const undoStack = useRef<
     Array<{ phone: ImageData; laptop: ImageData | null }>
   >([]);
@@ -280,6 +310,7 @@ export default function InkflowWorkspace() {
   const [refined, setRefined] = useState(false);
   const [toast, setToast] = useState("");
   const [isNewNote, setIsNewNote] = useState(true);
+  const [noteTitle, setNoteTitle] = useState("");
   const [recognizedText, setRecognizedText] = useState("");
   const [recognitionError, setRecognitionError] = useState("");
   const [darkMode, setDarkMode] = useState(false);
@@ -292,8 +323,83 @@ export default function InkflowWorkspace() {
     "local" | "cloud" | null
   >(null);
   const [enhancedSketch, setEnhancedSketch] = useState("");
+  const [enhancedSketchMode, setEnhancedSketchMode] = useState<
+    "local" | "cloud"
+  >("cloud");
+  const [sketchAiModalOpen, setSketchAiModalOpen] = useState(false);
+  const [sketchSourcePreview, setSketchSourcePreview] = useState("");
   const [sketchError, setSketchError] = useState("");
+  const [sketchProgress, setSketchProgress] = useState("");
+  const [sketchProgressStage, setSketchProgressStage] = useState<
+    "local" | "pollinations" | "pixazo" | "complete" | ""
+  >("");
+  const [sketchColor, setSketchColor] = useState("#24203a");
   const [sketchUndoCount, setSketchUndoCount] = useState(0);
+  const [persistenceReady, setPersistenceReady] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadError, setUploadError] = useState("");
+  const [noteTimestamp, setNoteTimestamp] = useState(currentNoteTimestamp);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        const savedNote = JSON.parse(
+          window.localStorage.getItem("inkflow-note") ?? "null"
+        ) as { title?: string; text?: string; timestamp?: string } | null;
+        if (savedNote) {
+          setNoteTitle(savedNote.title ?? "");
+          setRecognizedText(savedNote.text ?? "");
+          if (savedNote.timestamp) setNoteTimestamp(savedNote.timestamp);
+        }
+        setEnhancedSketch(
+          window.localStorage.getItem("inkflow-enhanced-sketch") ?? ""
+        );
+        if (window.localStorage.getItem("inkflow-enhanced-sketch-on-canvas") === "true")
+          setEnhancedSketchMode("local");
+      } catch {
+        // Ignore malformed or unavailable browser storage and keep the live state.
+      } finally {
+        setPersistenceReady(true);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    if (!persistenceReady) return;
+    try {
+      window.localStorage.setItem(
+        "inkflow-note",
+        JSON.stringify({
+          title: noteTitle,
+          text: recognizedText,
+          timestamp: noteTimestamp,
+        })
+      );
+    } catch {
+      // The note remains editable if private browsing disables storage.
+    }
+  }, [noteTitle, noteTimestamp, persistenceReady, recognizedText]);
+
+  useEffect(() => {
+    if (!persistenceReady || mode !== "sketch") return;
+    try {
+      if (enhancedSketch)
+        window.localStorage.setItem(
+          "inkflow-enhanced-sketch",
+          enhancedSketch
+        );
+      else window.localStorage.removeItem("inkflow-enhanced-sketch");
+      window.localStorage.setItem(
+        "inkflow-enhanced-sketch-on-canvas",
+        String(Boolean(enhancedSketch) && enhancedSketchMode === "local")
+      );
+    } catch {
+      // The original canvas remains usable if browser storage is full.
+    }
+  }, [enhancedSketch, enhancedSketchMode, mode, persistenceReady]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -359,11 +465,60 @@ export default function InkflowWorkspace() {
       context?.drawImage(snapshot, 0, 0, rect.width, rect.height);
   }, []);
 
+  const saveSketchCanvas = useCallback(() => {
+    if (modeRef.current !== "sketch") return;
+    const canvas = laptopCanvasRef.current;
+    if (!canvas) return;
+    try {
+      window.localStorage.setItem(
+        "inkflow-sketch-canvas",
+        canvas.toDataURL("image/png")
+      );
+    } catch {
+      // Keep drawing even if the browser's local storage quota is exhausted.
+    }
+  }, []);
+
+  const scheduleSketchSave = useCallback(() => {
+    if (modeRef.current !== "sketch") return;
+    if (sketchSaveTimer.current) clearTimeout(sketchSaveTimer.current);
+    sketchSaveTimer.current = setTimeout(saveSketchCanvas, 250);
+  }, [saveSketchCanvas]);
+
   useEffect(() => {
     resizeLaptopCanvas();
     window.addEventListener("resize", resizeLaptopCanvas);
     return () => window.removeEventListener("resize", resizeLaptopCanvas);
   }, [isNewNote, mode, resizeLaptopCanvas]);
+
+  useEffect(() => {
+    if (!persistenceReady || mode !== "sketch") return;
+    const saved = window.localStorage.getItem("inkflow-sketch-canvas");
+    const canvas = laptopCanvasRef.current;
+    if (!saved || !canvas) return;
+    const frame = requestAnimationFrame(() => {
+      const image = new window.Image();
+      image.onload = () => {
+        const context = canvas.getContext("2d");
+        if (!context) return;
+        remoteUndoStack.current = [
+          context.createImageData(canvas.width, canvas.height),
+        ];
+        const rect = canvas.getBoundingClientRect();
+        context.drawImage(image, 0, 0, rect.width, rect.height);
+        setSketchUndoCount(1);
+      };
+      image.src = saved;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [mode, persistenceReady]);
+
+  useEffect(
+    () => () => {
+      if (sketchSaveTimer.current) clearTimeout(sketchSaveTimer.current);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!phone) return;
@@ -466,6 +621,7 @@ export default function InkflowWorkspace() {
     lastPoint.current = next;
     setInked(true);
     setRefined(false);
+    scheduleSketchSave();
   };
 
   const clearInk = () => {
@@ -489,11 +645,20 @@ export default function InkflowWorkspace() {
     setRefined(false);
     setEnhancedSketch("");
     setSketchError("");
+    setSketchProgress("");
+    setSketchProgressStage("");
+    setSketchAiModalOpen(false);
+    setSketchSourcePreview("");
     setSketchUndoCount(0);
   };
 
   const changeMode = (nextMode: "notes" | "sketch") => {
     if (modeRef.current === nextMode) return;
+    if (modeRef.current === "sketch") saveSketchCanvas();
+    const retainedEnhancedSketch =
+      enhancedSketch ||
+      window.localStorage.getItem("inkflow-enhanced-sketch") ||
+      "";
     modeRef.current = nextMode;
     setMode(nextMode);
     window.localStorage.setItem("inkflow-workspace", nextMode);
@@ -508,12 +673,86 @@ export default function InkflowWorkspace() {
     setPairing(false);
     setRemotePhone(false);
     clearInk();
+    setEnhancedSketch(retainedEnhancedSketch);
   };
 
   const clearSketch = () => {
+    if (sketchSaveTimer.current) {
+      clearTimeout(sketchSaveTimer.current);
+      sketchSaveTimer.current = null;
+    }
     clearInk();
+    window.localStorage.removeItem("inkflow-sketch-canvas");
+    window.localStorage.removeItem("inkflow-enhanced-sketch");
+    window.localStorage.removeItem("inkflow-enhanced-sketch-on-canvas");
     socket.emit("clear", {});
     notify("Canvas cleared");
+  };
+
+  const startLaptopSketch = (
+    event: React.PointerEvent<HTMLCanvasElement>
+  ) => {
+    if (modeRef.current !== "sketch") return;
+    const canvas = event.currentTarget;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    remoteUndoStack.current.push(
+      context.getImageData(0, 0, canvas.width, canvas.height)
+    );
+    if (remoteUndoStack.current.length > 20)
+      remoteUndoStack.current.shift();
+    setSketchUndoCount(remoteUndoStack.current.length);
+    setEnhancedSketch("");
+    setSketchError("");
+    setSketchProgress("");
+    setSketchProgressStage("");
+    drawing.current = true;
+    lastPoint.current = point(event);
+    canvas.setPointerCapture(event.pointerId);
+    socket.emit("stroke:start", {});
+  };
+
+  const moveLaptopSketch = (
+    event: React.PointerEvent<HTMLCanvasElement>
+  ) => {
+    if (!drawing.current || modeRef.current !== "sketch") return;
+    const canvas = event.currentTarget;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const next = point(event);
+    context.beginPath();
+    context.moveTo(lastPoint.current.x, lastPoint.current.y);
+    context.lineTo(next.x, next.y);
+    context.globalCompositeOperation = "source-over";
+    context.strokeStyle = sketchColor;
+    context.lineWidth = 3;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.stroke();
+    const rect = canvas.getBoundingClientRect();
+    socket.emit("stroke", {
+      from: {
+        x: lastPoint.current.x / rect.width,
+        y: lastPoint.current.y / rect.height,
+      },
+      to: { x: next.x / rect.width, y: next.y / rect.height },
+      tool: "pen",
+      color: sketchColor,
+      width: 3,
+      opacity: 1,
+    });
+    lastPoint.current = next;
+    remoteInkVersion.current += 1;
+    scheduleSketchSave();
+  };
+
+  const stopLaptopSketch = (
+    event: React.PointerEvent<HTMLCanvasElement>
+  ) => {
+    drawing.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    scheduleSketchSave();
   };
 
   const undoRemoteSketch = (sendToPhone: boolean) => {
@@ -524,7 +763,10 @@ export default function InkflowWorkspace() {
     setSketchUndoCount(remoteUndoStack.current.length);
     setEnhancedSketch("");
     setSketchError("");
+    setSketchProgress("");
+    setSketchProgressStage("");
     remoteInkVersion.current += 1;
+    saveSketchCanvas();
     if (sendToPhone) socket.emit("undo", {});
     notify("Last stroke undone");
   };
@@ -545,6 +787,108 @@ export default function InkflowWorkspace() {
   const insertLineBreak = () => {
     setRecognizedText((current) => current.replace(/[ \t]+$/, "") + "\n");
     notify("New line added");
+  };
+
+  const downloadNote = () => {
+    const title = noteTitle.trim() || "Untitled note";
+    const contents = `${title}\n${noteTimestamp}\n\n${recognizedText}`;
+    const blob = new Blob([contents], { type: "text/plain;charset=utf-8" });
+    downloadFile(
+      URL.createObjectURL(blob),
+      `${fileSafeTitle(title, "inkflow-note")}.txt`
+    );
+    notify("Note downloaded");
+  };
+
+  const appendUploadedText = (text: string) => {
+    const cleaned = text.trim();
+    if (!cleaned) throw new Error("No readable text was found in this file.");
+    setRecognizedText((current) =>
+      current.trim() ? `${current.trimEnd()}\n\n${cleaned}` : cleaned
+    );
+  };
+
+  const uploadNoteFile = async (file: File) => {
+    if (uploading) return;
+    setUploading(true);
+    setUploadError("");
+    try {
+      if (file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt")) {
+        setUploadStatus("Reading text file…");
+        appendUploadedText(await file.text());
+      } else if (file.type.startsWith("image/")) {
+        setUploadStatus("Reading image locally with Tesseract…");
+        const image = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error("The image could not be read."));
+          reader.readAsDataURL(file);
+        });
+        const Tesseract = await import("tesseract.js");
+        const worker = await Tesseract.createWorker("eng");
+        let localText = "";
+        try {
+          const localResult = await worker.recognize(image);
+          localText = localResult.data.text.trim();
+        } catch {
+          // OCR.space can still recover text if local recognition fails.
+        } finally {
+          await worker.terminate();
+        }
+
+        setUploadStatus("Checking OCR.space for a refined result…");
+        let finalText = localText;
+        try {
+          const response = await fetch("/api/recognize-handwriting", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image }),
+          });
+          const result = (await response.json()) as { text?: string };
+          if (response.ok && result.text?.trim()) finalText = result.text.trim();
+        } catch {
+          // Tesseract remains the offline fallback when OCR.space is unavailable.
+        }
+        appendUploadedText(finalText);
+      } else {
+        throw new Error("Choose a TXT file or an image file.");
+      }
+      setUploadOpen(false);
+      setUploadStatus("");
+      notify("Uploaded text added to the note");
+    } catch (error) {
+      setUploadError(
+        error instanceof Error ? error.message : "The file could not be imported."
+      );
+      setUploadStatus("");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const downloadSketch = () => {
+    if (enhancedSketch) {
+      downloadFile(
+        enhancedSketch,
+        enhancedSketch.startsWith("data:image/jpeg")
+          ? "inkflow-enhanced-sketch.jpg"
+          : "inkflow-enhanced-sketch.png"
+      );
+      notify("Enhanced sketch downloaded");
+      return;
+    }
+    const canvas = laptopCanvasRef.current;
+    if (!canvas) return;
+    const flattened = document.createElement("canvas");
+    flattened.width = canvas.width;
+    flattened.height = canvas.height;
+    const context = flattened.getContext("2d");
+    if (!context) return;
+    context.fillStyle = "#fffdf8";
+    context.fillRect(0, 0, flattened.width, flattened.height);
+    context.drawImage(canvas, 0, 0);
+    downloadFile(flattened.toDataURL("image/png"), "inkflow-sketch.png");
+    notify("Sketch downloaded");
   };
 
   const recognizeRemoteInk = async () => {
@@ -578,10 +922,12 @@ export default function InkflowWorkspace() {
     const session = createSessionId();
     const url = `${window.location.origin}/write?session=${session}&mode=${mode}`;
     setPairing(true);
+    setRemotePhone(false);
     setPairingUrl(url);
     setQrImage(await QRCodeGenerator.toDataURL(url, { width: 292, margin: 1 }));
     socket.off("phone:connected");
     socket.off("phone:disconnected");
+    socket.off("phone:status");
     socket.off("stroke:start");
     socket.off("stroke");
     socket.off("undo");
@@ -589,12 +935,14 @@ export default function InkflowWorkspace() {
     socket.off("enter");
     socket.off("enhance-note");
     socket.off("enhance-sketch");
-    socket.on("phone:connected", () => {
-      setRemotePhone(true);
-      setPairing(false);
-      notify("Phone connected through socket");
+    socket.on("phone:status", (payload?: { connected?: boolean }) => {
+      const connected = payload?.connected === true;
+      setRemotePhone(connected);
+      if (connected) {
+        setPairing(false);
+        notify("Phone connected through socket");
+      }
     });
-    socket.on("phone:disconnected", () => setRemotePhone(false));
     socket.on("stroke:start", () => {
       const canvas = laptopCanvasRef.current;
       const context = canvas?.getContext("2d");
@@ -647,12 +995,19 @@ export default function InkflowWorkspace() {
         context.stroke();
         context.globalAlpha = 1;
         remoteInkVersion.current += 1;
+        scheduleSketchSave();
       }
     );
     socket.on("undo", () => {
       undoRemoteSketch(false);
     });
-    socket.on("clear", clearInk);
+    socket.on("clear", (payload?: { reason?: string }) => {
+      clearInk();
+      if (modeRef.current === "sketch" && payload?.reason !== "converted") {
+        window.localStorage.removeItem("inkflow-sketch-canvas");
+        window.localStorage.removeItem("inkflow-enhanced-sketch");
+      }
+    });
     socket.on("enter", insertLineBreak);
     socket.on("enhance-note", async () => {
       if (modeRef.current !== "notes") return;
@@ -690,7 +1045,44 @@ export default function InkflowWorkspace() {
     }
   };
 
-  const enhanceSketch = async (enhancementMode: "local" | "cloud") => {
+  const openSketchAiModal = () => {
+    const canvas = laptopCanvasRef.current;
+    if (!canvas || !remoteUndoStack.current.length) {
+      setSketchError("Draw something before creating an AI image.");
+      return;
+    }
+    const preview = document.createElement("canvas");
+    preview.width = canvas.width;
+    preview.height = canvas.height;
+    const context = preview.getContext("2d");
+    if (!context) return;
+    context.fillStyle = "#fffdf8";
+    context.fillRect(0, 0, preview.width, preview.height);
+    context.drawImage(canvas, 0, 0);
+    setEnhancedSketchMode("cloud");
+    setSketchSourcePreview(preview.toDataURL("image/png"));
+    setSketchProgress("");
+    setSketchProgressStage("");
+    setSketchError("");
+    setSketchAiModalOpen(true);
+  };
+
+  const closeSketchAiModal = () => {
+    if (
+      enhancedSketch &&
+      enhancedSketchMode === "cloud" &&
+      sketchProgressStage === "complete"
+    ) {
+      setEnhancedSketchMode("local");
+      notify("Generated image placed on the canvas");
+    }
+    setSketchAiModalOpen(false);
+  };
+
+  const enhanceSketch = async (
+    enhancementMode: "local" | "cloud",
+    description = ""
+  ) => {
     const canvas = laptopCanvasRef.current;
     if (!canvas || !remoteUndoStack.current.length) {
       setSketchError(
@@ -700,6 +1092,8 @@ export default function InkflowWorkspace() {
     }
     setEnhancingSketchMode(enhancementMode);
     setSketchError("");
+    setSketchProgressStage("local");
+    setSketchProgress("Preparing and cleaning your sketch locally");
     try {
       const flattened = document.createElement("canvas");
       flattened.width = canvas.width;
@@ -709,24 +1103,79 @@ export default function InkflowWorkspace() {
       context.fillStyle = "#fffdf8";
       context.fillRect(0, 0, flattened.width, flattened.height);
       context.filter =
-        enhancementMode === "local" ? "contrast(1.16) saturate(1.18)" : "none";
+        enhancementMode === "local"
+          ? "contrast(1.16) saturate(1.18)"
+          : "contrast(1.08) saturate(1.06)";
       context.drawImage(canvas, 0, 0);
       context.filter = "none";
       if (enhancementMode === "local") {
+        setEnhancedSketchMode("local");
         setEnhancedSketch(flattened.toDataURL("image/png"));
+        setSketchProgressStage("complete");
+        setSketchProgress("Local polish complete");
         notify("Sketch polished locally — nothing was uploaded");
         return true;
       }
+      setEnhancedSketchMode("cloud");
+      setSketchSourcePreview(flattened.toDataURL("image/png"));
+      setSketchAiModalOpen(true);
+      const mask = document.createElement("canvas");
+      mask.width = flattened.width;
+      mask.height = flattened.height;
+      const maskContext = mask.getContext("2d");
+      if (!maskContext) throw new Error("The generation mask is unavailable.");
+      maskContext.fillStyle = "#fff";
+      maskContext.fillRect(0, 0, mask.width, mask.height);
       const response = await fetch("/api/enhance-sketch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: flattened.toDataURL("image/png") }),
+        body: JSON.stringify({
+          image: flattened.toDataURL("image/png"),
+          mask: mask.toDataURL("image/png"),
+          description,
+        }),
       });
-      const result = await response.json();
-      if (!response.ok || !result.image)
-        throw new Error(result.error ?? "The sketch could not be enhanced.");
-      setEnhancedSketch(result.image);
-      notify("Your sketch has been elevated");
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(result?.error ?? "The sketch could not be enhanced.");
+      }
+      if (!response.body) throw new Error("The enhancement stream was unavailable.");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      let completed = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        buffered += decoder.decode(value, { stream: !done });
+        const lines = buffered.split("\n");
+        buffered = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line) as {
+            type: "progress" | "result" | "error";
+            stage?: "local" | "pollinations" | "pixazo" | "complete";
+            message: string;
+            image?: string;
+            provider?: "pollinations" | "pixazo";
+            warning?: string;
+          };
+          if (event.stage) setSketchProgressStage(event.stage);
+          setSketchProgress(event.message);
+          if (event.type === "error") throw new Error(event.message);
+          if (event.type === "result" && event.image) {
+            setEnhancedSketch(event.image);
+            completed = true;
+            if (event.warning) setSketchError(event.warning);
+            notify(
+              event.provider === "pixazo"
+                ? "Final Pixazo image is ready"
+                : "Intermediate Pollinations image is ready"
+            );
+          }
+        }
+        if (done) break;
+      }
+      if (!completed) throw new Error("The AI pipeline returned no image.");
       return true;
     } catch (error) {
       setSketchError(
@@ -864,7 +1313,7 @@ export default function InkflowWorkspace() {
         error instanceof Error ? error.message : "Recognition failed";
       setRecognitionError(
         message === "Handwriting recognition is not configured."
-          ? "Add OPENAI_API_KEY to .env.local, then restart the development server."
+          ? "Add OCR_SPACE_API_KEY to .env.local, then restart the development server."
           : message
       );
       notify(message);
@@ -887,69 +1336,137 @@ export default function InkflowWorkspace() {
     });
   };
 
+  const createNewItem = () => {
+    if (sketchSaveTimer.current) {
+      clearTimeout(sketchSaveTimer.current);
+      sketchSaveTimer.current = null;
+    }
+    setPairing(false);
+    setRecognitionError("");
+    setSketchError("");
+    clearInk();
+    if (modeRef.current === "notes") {
+      setIsNewNote(true);
+      setNoteTitle("");
+      setRecognizedText("");
+      setNoteTimestamp(currentNoteTimestamp());
+      window.localStorage.removeItem("inkflow-note");
+      notify("New blank note created");
+    } else {
+      window.localStorage.removeItem("inkflow-sketch-canvas");
+      window.localStorage.removeItem("inkflow-enhanced-sketch");
+      socket.emit("clear", {});
+      notify("New blank sketch created");
+    }
+  };
+
   return (
     <main className={`app-shell ${darkMode ? "dark-theme" : ""}`}>
-      <AppHeader
-        phoneConnected={phone || remotePhone}
-        onToggleSidebar={() => setSidebar(!sidebar)}
-        darkMode={darkMode}
-        onToggleTheme={toggleTheme}
-      />
-
       <div className="main-grid">
         <WorkspaceSidebar
           open={sidebar}
           isNewNote={isNewNote}
           mode={mode}
-          onNewNote={() => {
-            changeMode("notes");
-            setIsNewNote(true);
-          }}
+          onNewNote={createNewItem}
           onModeChange={changeMode}
           onCloudClick={() => notify("Cloud saving is planned for V2")}
+          darkMode={darkMode}
+          onToggleTheme={toggleTheme}
+          phoneConnected={phone || remotePhone}
+          onConnectPhone={() => void startSocketPairing()}
         />
 
         <section className="workspace">
-          <div className="doc-head">
-            <div>
-              <div className="eyebrow">
-                <span>{mode === "sketch" ? "Create" : "Notes"}</span>
-                <Icon name="chevron" size={13} />
-                <span>
-                  {mode === "sketch"
-                    ? "Sketch Studio"
-                    : isNewNote
-                    ? "New note"
-                    : "Physics"}
-                </span>
-              </div>
-              <h1>
-                {mode === "sketch"
-                  ? "Untitled sketch"
-                  : isNewNote
-                  ? "Untitled note"
-                  : "Wave Motion & Oscillations"}
-              </h1>
+          <button
+            className="workspace-menu-button"
+            onClick={() => setSidebar(!sidebar)}
+            aria-label="Toggle sidebar"
+          >
+            <Icon name="menu" size={19} />
+          </button>
+          {mode === "notes" && !isNewNote && (
+            <div className={`workspace-sync-badge ${phone || remotePhone ? "live" : ""}`}>
+              <span />
+              {phone || remotePhone ? "Live sync" : "Saved locally"}
             </div>
-            <div className="doc-actions">
-              {mode === "notes" && (
-                <button
-                  className={`connection ${
+          )}
+          {mode === "notes" && isNewNote && (
+            <div className="note-screen-bar">
+              <div className="note-screen-meta">
+                <input
+                  aria-label="Note title"
+                  placeholder="Untitled note"
+                  value={noteTitle}
+                  onChange={(event) => setNoteTitle(event.target.value)}
+                />
+                <time suppressHydrationWarning>{noteTimestamp}</time>
+              </div>
+              <div className="note-screen-actions">
+                <div
+                  className={`note-live-status ${
                     phone || remotePhone ? "connected" : ""
                   }`}
-                  onClick={() => void startSocketPairing()}
                 >
-                  <Icon
-                    name={phone || remotePhone ? "wifi" : "scan"}
-                    size={18}
-                  />
-                  {phone || remotePhone ? "Phone connected" : "Connect phone"}
+                  <span className={refining ? "status-pulse" : ""} />
+                  {refining
+                    ? "Reading handwriting…"
+                    : phone || remotePhone
+                      ? sketchUndoCount > 0
+                        ? "Ink ready"
+                        : "Phone connected · Ready to write"
+                      : "Phone not connected"}
+                </div>
+                {phone || remotePhone ? (
+                  <button
+                    className="screen-enhance-button"
+                    onClick={() => void recognizeRemoteInk()}
+                    disabled={sketchUndoCount === 0 || refining}
+                  >
+                    <Icon name="sparkle" size={14} />
+                    {refining ? "Enhancing…" : "Enhance"}
+                  </button>
+                ) : (
+                  <button
+                    className="screen-connect-button"
+                    onClick={() => void startSocketPairing()}
+                  >
+                    <Icon name="scan" size={15} /> Connect phone
+                  </button>
+                )}
+                <button
+                  className="screen-upload-button"
+                  onClick={() => {
+                    setUploadError("");
+                    setUploadStatus("");
+                    setUploadOpen(true);
+                  }}
+                >
+                  <Icon name="upload" size={14} /> <span>Upload</span>
                 </button>
-              )}
+                <button
+                  className="screen-download-button"
+                  onClick={downloadNote}
+                  disabled={!noteTitle.trim() && !recognizedText.trim()}
+                >
+                  <Icon name="download" size={14} /> <span>Download</span>
+                </button>
+                <div className={`workspace-sync-badge inline ${phone || remotePhone ? "live" : ""}`}>
+                  <span />
+                  {phone || remotePhone ? "Live sync" : "Saved locally"}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="paper-wrap">
+          <div
+            className={`paper-wrap ${
+              mode === "sketch"
+                ? "sketch-wrap"
+                : isNewNote
+                  ? "new-note-wrap"
+                  : ""
+            }`}
+          >
             {mode === "sketch" ? (
               <SketchStudio
                 canvasRef={laptopCanvasRef}
@@ -958,22 +1475,34 @@ export default function InkflowWorkspace() {
                 onEnhance={(enhancementMode) =>
                   void enhanceSketch(enhancementMode)
                 }
+                onOpenAiModal={openSketchAiModal}
+                onGenerateAi={(description) =>
+                  void enhanceSketch("cloud", description)
+                }
                 onClear={clearSketch}
                 onUndo={() => undoRemoteSketch(true)}
+                onDownload={downloadSketch}
+                onPointerDown={startLaptopSketch}
+                onPointerMove={moveLaptopSketch}
+                onPointerUp={stopLaptopSketch}
                 canUndo={sketchUndoCount > 0}
                 enhancingMode={enhancingSketchMode}
                 enhancedImage={enhancedSketch}
+                enhancedImageMode={enhancedSketchMode}
                 error={sketchError}
+                progress={sketchProgress}
+                progressStage={sketchProgressStage}
+                aiModalOpen={sketchAiModalOpen}
+                sourcePreview={sketchSourcePreview}
+                onCloseAiModal={closeSketchAiModal}
+                selectedColor={sketchColor}
+                onColorChange={setSketchColor}
               />
             ) : isNewNote ? (
               <BlankNoteSheet
                 phoneConnected={phone || remotePhone}
-                onConnectPhone={() => void startSocketPairing()}
                 remoteCanvasRef={laptopCanvasRef}
                 recognizedText={recognizedText}
-                recognizing={refining}
-                canEnhance={sketchUndoCount > 0}
-                onEnhance={() => void recognizeRemoteInk()}
                 onTextChange={setRecognizedText}
                 recognitionError={recognitionError}
               />
@@ -1066,6 +1595,59 @@ export default function InkflowWorkspace() {
           </div>
         </section>
       </div>
+
+      {uploadOpen && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={() => !uploading && setUploadOpen(false)}
+        >
+          <section
+            className="upload-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              onClick={() => setUploadOpen(false)}
+              disabled={uploading}
+              aria-label="Close upload"
+            >
+              <Icon name="x" />
+            </button>
+            <div className="pair-icon">
+              <Icon name="upload" size={23} />
+            </div>
+            <h2>Import into this note</h2>
+            <p>
+              TXT files are inserted directly. Images are read locally with
+              Tesseract first, with OCR.space used only when available.
+            </p>
+            <label className={`upload-dropzone ${uploading ? "busy" : ""}`}>
+              {uploading ? <span className="spinner" /> : <Icon name="image" size={25} />}
+              <b>{uploading ? uploadStatus || "Reading file…" : "Choose an image or TXT file"}</b>
+              <small>PNG, JPG, WEBP, GIF, BMP, or TXT</small>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,text/plain,.txt"
+                disabled={uploading}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void uploadNoteFile(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            {uploadError && (
+              <div className="upload-error" role="alert">
+                <Icon name="x" size={15} /> {uploadError}
+              </div>
+            )}
+            <small className="upload-privacy">
+              Tesseract runs in your browser. Your image is sent to OCR.space
+              only for the optional refinement step.
+            </small>
+          </section>
+        </div>
+      )}
 
       {pairing && (
         <div className="modal-backdrop" onMouseDown={() => setPairing(false)}>
