@@ -47,7 +47,7 @@ export function WorkspaceSidebar({ open, isNewNote, mode, onNewNote, onModeChang
       </div>
       <div className="sidebar-bottom">
         <div className="sidebar-account">
-          <button className="sidebar-profile" aria-label="Open profile"><span>KS</span><span><b>KS</b><small>Profile</small></span></button>
+          <button className="sidebar-profile" aria-label="Open profile"><span>AK</span><span><b>AK</b><small>Profile</small></span></button>
           <button className="sidebar-theme" onClick={onToggleTheme} aria-label={`Switch to ${darkMode ? "light" : "dark"} mode`} aria-pressed={darkMode}>
             <span aria-hidden="true">{darkMode ? "☀" : "☾"}</span>
             {darkMode ? "Light" : "Dark"}

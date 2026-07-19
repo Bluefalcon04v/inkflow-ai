@@ -884,7 +884,7 @@ export default function InkflowWorkspace() {
     flattened.height = canvas.height;
     const context = flattened.getContext("2d");
     if (!context) return;
-    context.fillStyle = "#fffdf8";
+    context.fillStyle = "#ffffff";
     context.fillRect(0, 0, flattened.width, flattened.height);
     context.drawImage(canvas, 0, 0);
     downloadFile(flattened.toDataURL("image/png"), "inkflow-sketch.png");
@@ -1056,7 +1056,7 @@ export default function InkflowWorkspace() {
     preview.height = canvas.height;
     const context = preview.getContext("2d");
     if (!context) return;
-    context.fillStyle = "#fffdf8";
+    context.fillStyle = "#ffffff";
     context.fillRect(0, 0, preview.width, preview.height);
     context.drawImage(canvas, 0, 0);
     setEnhancedSketchMode("cloud");
@@ -1100,7 +1100,7 @@ export default function InkflowWorkspace() {
       flattened.height = canvas.height;
       const context = flattened.getContext("2d");
       if (!context) throw new Error("The sketch canvas is unavailable.");
-      context.fillStyle = "#fffdf8";
+      context.fillStyle = "#ffffff";
       context.fillRect(0, 0, flattened.width, flattened.height);
       context.filter =
         enhancementMode === "local"

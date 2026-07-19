@@ -21,7 +21,7 @@ export function AppHeader({ phoneConnected, onToggleSidebar, darkMode, onToggleT
           <span aria-hidden="true">{darkMode ? "☀" : "☾"}</span>
           <small>{darkMode ? "Light" : "Dark"}</small>
         </button>
-        <button className="avatar" aria-label="Open profile">KS</button>
+        <button className="avatar" aria-label="Open profile">AK</button>
       </div>
     </header>
   );

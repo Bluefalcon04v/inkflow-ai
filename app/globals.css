@@ -1228,7 +1228,7 @@ body {
 .mobile-sketch-studio .mobile-colors { gap: 4px; }
 .mobile-sketch-studio .mobile-colors button { width: 20px; height: 20px; }
 .mobile-sketch-studio .mobile-sketch-options input { width: 64px; }
-.mobile-sketch-studio > canvas { width: calc(100% - 10px); min-height: 0; margin: 4px 5px; border: 1px solid #d9d2e2; border-radius: 10px; background-color: #fffdf8; background-image: radial-gradient(#d9d3df 1px, transparent 1px); background-size: 20px 20px; box-shadow: 0 6px 16px #30244812; }
+.mobile-sketch-studio > canvas { width: calc(100% - 10px); min-height: 0; margin: 4px 5px; border: 1px solid #d9d2e2; border-radius: 10px; background: #fff; box-shadow: 0 6px 16px #30244812; }
 .mobile-sketch-studio > p { display: none; }
 
 .sketch-studio { width: 100%; min-height: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 9px; }
@@ -1263,9 +1263,9 @@ body {
 .sketch-connect-card p { margin: 5px 0 0; color: #756e7f; font-size: 10px; line-height: 1.45; }
 .sketch-connect-card button { display: flex; align-items: center; gap: 7px; min-width: 128px; padding: 10px 15px; color: #fff; background: #7357dd; font-size: 10px; }
 .sketch-error { display: flex; align-items: center; gap: 8px; padding: 10px 13px; border: 1px solid #f3caca; border-radius: 10px; color: #a64050; background: #fff5f5; font-size: 10px; }
-.sketch-canvas-frame { position: relative; flex: 1; min-height: 420px; overflow: hidden; border: 1px solid #ded9e4; border-radius: 14px; background-color: #fffdf8; background-image: radial-gradient(#d9d3df 1px, transparent 1px); background-size: 22px 22px; box-shadow: 0 10px 30px #2e244812; }
+.sketch-canvas-frame { position: relative; flex: 1; min-height: 420px; overflow: hidden; border: 1px solid #ded9e4; border-radius: 14px; background: #fff; box-shadow: 0 10px 30px #2e244812; }
 .sketch-canvas-frame > canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; cursor: crosshair; touch-action: none; }
-.sketch-canvas-frame > img { object-fit: contain; background: #fffdf8; z-index: 3; pointer-events: none; }
+.sketch-canvas-frame > img { object-fit: contain; background: #fff; z-index: 3; pointer-events: none; }
 .sketch-canvas-hint { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #a29baa; pointer-events: none; }
 .sketch-canvas-hint svg { color: #8b72df; }
 .sketch-canvas-hint b { color: #625a6c; font-family: Georgia, serif; font-size: 19px; }
@@ -1290,7 +1290,7 @@ body {
 .sketch-ai-modal > header button:disabled { opacity: .4; cursor: wait; }
 .sketch-ai-modal-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; color: #fff; background: linear-gradient(135deg, #684cd0, #9565dc); box-shadow: 0 7px 18px #7357dd35; }
 .sketch-ai-compare { display: grid; grid-template-columns: minmax(0, 1fr) 34px minmax(0, 1fr); align-items: center; gap: 10px; }
-.sketch-ai-preview { position: relative; height: min(390px, 48vh); overflow: hidden; border: 1px solid #dfd9e7; border-radius: 14px; background-color: #fffdf8; background-image: radial-gradient(#ddd7e2 1px, transparent 1px); background-size: 18px 18px; }
+.sketch-ai-preview { position: relative; height: min(390px, 48vh); overflow: hidden; border: 1px solid #dfd9e7; border-radius: 14px; background: #fff; }
 .sketch-ai-preview > span { position: absolute; top: 10px; left: 10px; z-index: 2; padding: 5px 8px; border: 1px solid #e2dceb; border-radius: 999px; color: #665f70; background: #fffffff0; font-size: 9px; font-weight: 750; }
 .sketch-ai-preview > img { object-fit: contain; }
 .sketch-ai-preview.final { background: #eeeaf3; }
@@ -1379,8 +1379,8 @@ body {
 .dark-theme .sketch-local-button { color: #d7ccfb; background: #373044; border-color: #55486e; }
 .dark-theme .sketch-undo-button, .dark-theme .sketch-clear-button { color: #c9c2cf; background: #37333d; border-color: #49434f; }
 .dark-theme .sketch-connect-card { background: linear-gradient(100deg, #332c49, #292631); border-color: #51446e; }
-.dark-theme .sketch-canvas-frame { background-color: #fffdf8; border-color: #514b58; background-image: radial-gradient(#d9d3df 1px, transparent 1px); }
-.dark-theme .sketch-canvas-frame > img { background: #fffdf8; }
+.dark-theme .sketch-canvas-frame { background: #fff; border-color: #514b58; }
+.dark-theme .sketch-canvas-frame > img { background: #fff; }
 .dark-theme .sketch-canvas-hint { color-scheme: light; }
 .dark-theme .sketch-canvas-hint svg { color: #7357dd; }
 .dark-theme .sketch-canvas-hint b { color: #4c4555; }
